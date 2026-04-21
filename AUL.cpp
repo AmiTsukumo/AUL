@@ -2,6 +2,7 @@
 #include <cctype>
 #include <algorithm>
 #include <sstream>
+#include <iomanip>
 #include <cmath>
 #include <fstream>
 
@@ -13,7 +14,25 @@ namespace AUL {
 std::string Value::toString() const {
     switch (type) {
         case NONE: return "none";
-        case NUMBER: return std::to_string(num);
+        case NUMBER: {
+            // Format number without trailing zeros
+            if (num == (double)(int)num) {
+                // It's a whole number, print without decimal
+                return std::to_string((int)num);
+            } else {
+                // Format with some precision and remove trailing zeros
+                std::stringstream ss;
+                ss << std::fixed << std::setprecision(6) << num;
+                std::string result = ss.str();
+                // Remove trailing zeros after decimal point
+                size_t dot_pos = result.find('.');
+                if (dot_pos != std::string::npos) {
+                    result.erase(result.find_last_not_of('0') + 1);
+                    if (result.back() == '.') result.pop_back();
+                }
+                return result;
+            }
+        }
         case BOOL: return boolean ? "true" : "false";
         case STRING: return *str;
         case TABLE: return "<table>";
@@ -59,19 +78,24 @@ void Environment::define(const std::string& name, const Value& value, bool mutab
 
 void Environment::assign(const std::string& name, const Value& value) {
     if (values.find(name) != values.end()) {
-        if (!mutableFlags[name]) throw std::runtime_error("Cannot reassign immutable 'val'");
+        if (!mutableFlags[name]) {
+            throw std::runtime_error("Error: cannot reassign immutable variable '" + name + "' (declared with 'val')");
+        }
         values[name] = value;
         return;
     }
-    if (parent) parent->assign(name, value);
-    else throw std::runtime_error("Undefined variable: " + name);
+    if (parent) {
+        parent->assign(name, value);
+        return;
+    }
+    throw std::runtime_error("Error: undefined variable '" + name + "' - variable must be declared before assignment");
 }
 
 Value Environment::get(const std::string& name) const {
     auto it = values.find(name);
     if (it != values.end()) return it->second;
     if (parent) return parent->get(name);
-    throw std::runtime_error("Undefined variable: " + name);
+    throw std::runtime_error("Error: undefined variable '" + name + "' - variable must be declared before use");
 }
 
 bool Environment::isMutable(const std::string& name) const {
@@ -86,7 +110,7 @@ bool Environment::isMutable(const std::string& name) const {
 // ----------------------------------------------------------------------
 enum class TokenType {
     IDENT, NUMBER, STRING, KEYWORD,
-    PLUS, MINUS, STAR, SLASH, PERCENT, CARET, DOTDOT,   // arithmetic & concat
+    PLUS, MINUS, STAR, SLASH, PERCENT, CARET, DOT, DOTDOT,   // arithmetic & concat
     EQ, EQEQ, BANG, BANGEQ, LT, LTE, GT, GTE,           // comparison
     AND, OR, NOT, AND_SYM, OR_SYM, NOT_SYM,              // logical/bitwise
     LPAREN, RPAREN, LBRACE, RBRACE, LBRACK, RBRACK,
@@ -120,7 +144,7 @@ static bool isKeyword(const std::string& id) {
     static const std::vector<std::string> keywords = {
         "var", "val", "global", "func", "if", "elif", "else", "for", "while",
         "break", "continue", "in", "and", "or", "not", "true", "false", "none",
-        "import", "from", "block", "return", "is"
+        "import", "from", "block", "return", "is", "print"
     };
     return std::find(keywords.begin(), keywords.end(), id) != keywords.end();
 }
@@ -149,6 +173,7 @@ static TokenType keywordType(const std::string& kw) {
     if (kw == "block") return TokenType::KEYWORD;
     if (kw == "return") return TokenType::KEYWORD;
     if (kw == "is") return TokenType::KEYWORD;
+    if (kw == "print") return TokenType::KEYWORD;
     return TokenType::IDENT;
 }
 
@@ -190,6 +215,15 @@ Token Lexer::readIdentifier() {
 
 Token Lexer::nextToken() {
     skipWhitespace();
+    while (pos < source.size() && source[pos] == '/' && pos + 1 < source.size() && source[pos+1] == '/') {
+        // Skip line comment
+        pos += 2;
+        while (pos < source.size() && source[pos] != '\n') {
+            pos++;
+        }
+        skipWhitespace();
+    }
+    
     if (pos >= source.size()) return {TokenType::END, "", 0, line};
     char c = source[pos];
     if (std::isdigit(c)) return readNumber();
@@ -219,7 +253,7 @@ Token Lexer::nextToken() {
         case '&': return {TokenType::AND_SYM, "&", 0, line};
         case '|':
             if (pos < source.size() && source[pos] == '|') { pos++; return {TokenType::OR_SYM, "||", 0, line}; }
-            break;
+            return {TokenType::OR_SYM, "|", 0, line};
         case '(': return {TokenType::LPAREN, "(", 0, line};
         case ')': return {TokenType::RPAREN, ")", 0, line};
         case '{': return {TokenType::LBRACE, "{", 0, line};
@@ -231,9 +265,11 @@ Token Lexer::nextToken() {
         case '~': return {TokenType::TILDE, "~", 0, line};
         case '.': 
             if (pos < source.size() && source[pos] == '.') { pos++; return {TokenType::DOTDOT, "..", 0, line}; }
-            break;
+            return {TokenType::DOT, ".", 0, line};
     }
-    throw std::runtime_error(std::string("Unexpected character: ") + c);
+    std::stringstream ss;
+    ss << "Lexical error on line " << line << ": unexpected character '" << c << "' (ASCII " << (int)c << ")";
+    throw std::runtime_error(ss.str());
 }
 
 // ----------------------------------------------------------------------
@@ -344,7 +380,12 @@ struct VarDeclStmt : Stmt {
     VarDeclStmt(const std::string& n, Expr* init, bool mut, bool global)
         : name(n), initializer(init), mutableFlag(mut), isGlobal(global) {}
     void execute(std::shared_ptr<Environment> env) override {
-        Value val = initializer ? initializer->evaluate(env) : Value();
+        Value val;
+        try {
+            val = initializer ? initializer->evaluate(env) : Value();
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Error initializing variable '" + name + "': " + e.what());
+        }
         if (isGlobal) {
             // find or create global environment (walk to top)
             auto top = env;
@@ -412,10 +453,11 @@ struct ForNumericStmt : Stmt {
         double from = start->evaluate(env).num;
         double to = end->evaluate(env).num;
         double stepVal = step ? step->evaluate(env).num : 1.0;
+        auto loopEnv = std::make_shared<Environment>(env);
         for (double i = from; (stepVal > 0 ? i < to : i > to); i += stepVal) {
-            env->define(varName, Value(i), true);
+            loopEnv->define(varName, Value(i), true);
             try {
-                body->execute(env);
+                body->execute(loopEnv);
             } catch (const std::string& ctrl) {
                 if (ctrl == "break") break;
                 if (ctrl == "continue") continue;
@@ -500,21 +542,50 @@ Value BinaryExpr::evaluate(std::shared_ptr<Environment> env) {
             case TokenType::PLUS: return a + b;
             case TokenType::MINUS: return a - b;
             case TokenType::STAR: return a * b;
-            case TokenType::SLASH: return a / b;
-            case TokenType::PERCENT: return std::fmod(a, b);
+            case TokenType::SLASH: {
+                if (b == 0) throw std::runtime_error("Division by zero");
+                return a / b;
+            }
+            case TokenType::PERCENT: {
+                if (b == 0) throw std::runtime_error("Modulo by zero");
+                return std::fmod(a, b);
+            }
             case TokenType::CARET: return std::pow(a, b);
             default: return 0;
         }
     };
     if (op == TokenType::DOTDOT) {
-        return Value(l.toString() + r.toString());
+        if (l.type == Value::STRING && r.type == Value::STRING) {
+            return Value(*l.str + *r.str);
+        }
+        std::string leftType = (l.type == Value::NONE) ? "none" : 
+                              (l.type == Value::NUMBER) ? "number" :
+                              (l.type == Value::BOOL) ? "bool" :
+                              (l.type == Value::STRING) ? "string" : "table/function";
+        std::string rightType = (r.type == Value::NONE) ? "none" : 
+                               (r.type == Value::NUMBER) ? "number" :
+                               (r.type == Value::BOOL) ? "bool" :
+                               (r.type == Value::STRING) ? "string" : "table/function";
+        throw std::runtime_error("Type error: cannot concatenate " + leftType + " and " + rightType + " (both must be strings)");
     }
     if (op == TokenType::EQEQ) return Value(l == r);
     if (op == TokenType::BANGEQ) return Value(l != r);
-    if (op == TokenType::LT) return Value(l.num < r.num);
-    if (op == TokenType::LTE) return Value(l.num <= r.num);
-    if (op == TokenType::GT) return Value(l.num > r.num);
-    if (op == TokenType::GTE) return Value(l.num >= r.num);
+    if (op == TokenType::LT || op == TokenType::LTE || op == TokenType::GT || op == TokenType::GTE) {
+        if (l.type == Value::NUMBER && r.type == Value::NUMBER) {
+            switch(op) {
+                case TokenType::LT: return Value(l.num < r.num);
+                case TokenType::LTE: return Value(l.num <= r.num);
+                case TokenType::GT: return Value(l.num > r.num);
+                case TokenType::GTE: return Value(l.num >= r.num);
+                default: break;
+            }
+        }
+        std::string leftType = (l.type == Value::NUMBER) ? "number" : 
+                              (l.type == Value::STRING) ? "string" : "other";
+        std::string rightType = (r.type == Value::NUMBER) ? "number" : 
+                               (r.type == Value::STRING) ? "string" : "other";
+        throw std::runtime_error("Type error: cannot compare " + leftType + " and " + rightType + " (both must be numbers or strings)");
+    }
     if (op == TokenType::AND || op == TokenType::AND_SYM) {
         if (l.type == Value::NUMBER && r.type == Value::NUMBER)
             return Value((double)((int)l.num & (int)r.num));
@@ -528,25 +599,88 @@ Value BinaryExpr::evaluate(std::shared_ptr<Environment> env) {
     // arithmetic
     if (l.type == Value::NUMBER && r.type == Value::NUMBER)
         return Value(binOp(l.num, r.num, op));
-    throw std::runtime_error("Type error in binary expression");
+    
+    std::string opStr = "+";
+    switch(op) {
+        case TokenType::PLUS: opStr = "+"; break;
+        case TokenType::MINUS: opStr = "-"; break;
+        case TokenType::STAR: opStr = "*"; break;
+        case TokenType::SLASH: opStr = "/"; break;
+        case TokenType::PERCENT: opStr = "%"; break;
+        case TokenType::CARET: opStr = "^"; break;
+        default: opStr = "?"; break;
+    }
+    std::string leftType = (l.type == Value::NUMBER) ? "number" : 
+                          (l.type == Value::STRING) ? "string" :
+                          (l.type == Value::BOOL) ? "bool" :
+                          (l.type == Value::TABLE) ? "table" : "other";
+    std::string rightType = (r.type == Value::NUMBER) ? "number" : 
+                           (r.type == Value::STRING) ? "string" :
+                           (r.type == Value::BOOL) ? "bool" :
+                           (r.type == Value::TABLE) ? "table" : "other";
+    throw std::runtime_error("Type error: cannot " + opStr + " " + leftType + " and " + rightType);
 }
 
 Value UnaryExpr::evaluate(std::shared_ptr<Environment> env) {
     Value v = expr->evaluate(env);
-    if (op == TokenType::MINUS) return Value(-v.num);
+    if (op == TokenType::MINUS) {
+        if (v.type != Value::NUMBER) {
+            throw std::runtime_error("Type error: cannot negate non-numeric type");
+        }
+        return Value(-v.num);
+    }
     if (op == TokenType::BANG || op == TokenType::NOT)
         return Value(!v.isTruthy());
     if (op == TokenType::NOT_SYM) { // bitwise NOT
         if (v.type == Value::NUMBER) return Value((double)~(int)v.num);
-        throw std::runtime_error("Bitwise NOT only on numbers");
+        throw std::runtime_error("Type error: bitwise NOT (~) only works on numbers");
     }
-    throw std::runtime_error("Invalid unary op");
+    throw std::runtime_error("Internal error: invalid unary operator");
 }
 
 Value IndexExpr::evaluate(std::shared_ptr<Environment> env) {
     Value tbl = table->evaluate(env);
     Value idx = index->evaluate(env);
-    if (tbl.type != Value::TABLE) throw std::runtime_error("Index on non-table");
+    
+    // Special handling for method calls on primitive types
+    if (idx.type == Value::STRING && tbl.type != Value::TABLE) {
+        std::string methodName = *idx.str;
+        
+        // Add toString method for all types
+        if (methodName == "toString") {
+            return Value(std::function<Value(const std::vector<Value>&)>([tbl](const std::vector<Value>& args) -> Value {
+                return Value(tbl.toString());
+            }));
+        }
+        
+        // Add type method
+        if (methodName == "type") {
+            return Value(std::function<Value(const std::vector<Value>&)>([tbl](const std::vector<Value>& args) -> Value {
+                std::string typeStr;
+                switch(tbl.type) {
+                    case Value::NONE: typeStr = "none"; break;
+                    case Value::NUMBER: typeStr = "number"; break;
+                    case Value::BOOL: typeStr = "bool"; break;
+                    case Value::STRING: typeStr = "string"; break;
+                    case Value::TABLE: typeStr = "table"; break;
+                    case Value::NATIVE_FUNC: typeStr = "native_func"; break;
+                    case Value::USER_FUNC: typeStr = "function"; break;
+                }
+                return Value(typeStr);
+            }));
+        }
+        
+        // Unknown method
+        throw std::runtime_error("Error: unknown method '" + methodName + "' on " + tbl.toString());
+    }
+    
+    if (tbl.type != Value::TABLE) {
+        std::string typeStr = (tbl.type == Value::NUMBER) ? "number" : 
+                             (tbl.type == Value::STRING) ? "string" :
+                             (tbl.type == Value::BOOL) ? "bool" :
+                             (tbl.type == Value::NONE) ? "none" : "function";
+        throw std::runtime_error("Type error: cannot index " + typeStr + " (only tables can be indexed)");
+    }
     auto it = tbl.table->find(idx);
     if (it != tbl.table->end()) return it->second;
     return Value(); // none
@@ -556,11 +690,20 @@ Value CallExpr::evaluate(std::shared_ptr<Environment> env) {
     Value calleeVal = callee->evaluate(env);
     std::vector<Value> argVals;
     for (auto& a : args) argVals.push_back(a->evaluate(env));
+    
     if (calleeVal.type == Value::NATIVE_FUNC) {
-        return calleeVal.nativeFunc(argVals);
+        try {
+            return calleeVal.nativeFunc(argVals);
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Error in native function call: " + std::string(e.what()));
+        }
     } else if (calleeVal.type == Value::USER_FUNC) {
         auto func = calleeVal.userFunc;
         auto callEnv = std::make_shared<Environment>(func->closure);
+        if (argVals.size() > func->params.size()) {
+            throw std::runtime_error("Error: function takes " + std::to_string(func->params.size()) + 
+                                   " parameters but " + std::to_string(argVals.size()) + " arguments were provided");
+        }
         for (size_t i = 0; i < func->params.size(); ++i) {
             callEnv->define(func->params[i], i < argVals.size() ? argVals[i] : Value(), true);
         }
@@ -571,7 +714,13 @@ Value CallExpr::evaluate(std::shared_ptr<Environment> env) {
         }
         return Value();
     }
-    throw std::runtime_error("Calling non-function");
+    
+    std::string typeStr = (calleeVal.type == Value::NUMBER) ? "number" : 
+                         (calleeVal.type == Value::STRING) ? "string" :
+                         (calleeVal.type == Value::BOOL) ? "bool" :
+                         (calleeVal.type == Value::TABLE) ? "table" :
+                         (calleeVal.type == Value::NONE) ? "none" : "unknown";
+    throw std::runtime_error("Type error: cannot call " + typeStr + " (not a function)");
 }
 
 void ForInStmt::execute(std::shared_ptr<Environment> env) {
@@ -579,8 +728,16 @@ void ForInStmt::execute(std::shared_ptr<Environment> env) {
     if (iter.type == Value::TABLE) {
         if (vars.size() == 1) {
             for (auto& [k, v] : *iter.table) {
-                env->define(vars[0], v, true);
-                try { body->execute(env); }
+                auto loopEnv = std::make_shared<Environment>(env);
+                loopEnv->define(vars[0], v, true);
+                try { 
+                    // Create a new block environment for each iteration
+                    auto blockEnv = std::make_shared<Environment>(loopEnv);
+                    for (auto& stmt : iter.table->empty() ? std::vector<std::shared_ptr<Stmt>>() : std::vector<std::shared_ptr<Stmt>>()) {
+                        // This is handled in the body
+                    }
+                    body->execute(loopEnv);
+                }
                 catch (const std::string& ctrl) {
                     if (ctrl == "break") break;
                     if (ctrl == "continue") continue;
@@ -589,18 +746,27 @@ void ForInStmt::execute(std::shared_ptr<Environment> env) {
             }
         } else if (vars.size() == 2) {
             for (auto& [k, v] : *iter.table) {
-                env->define(vars[0], k, true);
-                env->define(vars[1], v, true);
-                try { body->execute(env); }
+                auto loopEnv = std::make_shared<Environment>(env);
+                loopEnv->define(vars[0], k, true);
+                loopEnv->define(vars[1], v, true);
+                try { 
+                    body->execute(loopEnv);
+                }
                 catch (const std::string& ctrl) {
                     if (ctrl == "break") break;
                     if (ctrl == "continue") continue;
                     throw;
                 }
             }
+        } else {
+            throw std::runtime_error("Error: for-in loop supports 1 or 2 variables, got " + std::to_string(vars.size()));
         }
     } else {
-        throw std::runtime_error("for-in only works on tables");
+        std::string typeStr = (iter.type == Value::NUMBER) ? "number" : 
+                             (iter.type == Value::STRING) ? "string" :
+                             (iter.type == Value::BOOL) ? "bool" :
+                             (iter.type == Value::NONE) ? "none" : "function";
+        throw std::runtime_error("Type error: for-in loop requires a table, got " + typeStr);
     }
 }
 
@@ -631,10 +797,35 @@ public:
 private:
     Lexer lexer;
     Token current;
-    void advance() { current = lexer.nextToken(); }
+    Token previous;
+    
+    void advance() { 
+        previous = current;
+        current = lexer.nextToken(); 
+    }
+    
     bool check(TokenType t) const { return current.type == t; }
-    bool match(TokenType t) { if (check(t)) { advance(); return true; } return false; }
-    void expect(TokenType t, const std::string& msg) { if (!match(t)) throw std::runtime_error(msg); }
+    
+    bool match(TokenType t) { 
+        if (check(t)) { 
+            advance(); 
+            return true; 
+        } 
+        return false; 
+    }
+    
+    void expect(TokenType t, const std::string& msg) { 
+        if (!match(t)) {
+            std::stringstream ss;
+            ss << "Parse error on line " << current.line << ": " << msg;
+            if (current.type != TokenType::END) {
+                ss << " (found '" << current.lexeme << "' instead)";
+            } else {
+                ss << " (found end of file)";
+            }
+            throw std::runtime_error(ss.str());
+        }
+    }
 
     std::unique_ptr<Expr> expression();
     std::unique_ptr<Expr> logicalOr();
@@ -670,7 +861,9 @@ std::vector<std::unique_ptr<Stmt>> Parser::parse() {
 }
 
 // Expression precedence helpers (simplified)
-std::unique_ptr<Expr> Parser::expression() { return logicalOr(); }
+std::unique_ptr<Expr> Parser::expression() { 
+    return logicalOr();
+}
 std::unique_ptr<Expr> Parser::logicalOr() {
     auto expr = logicalAnd();
     while (check(TokenType::OR) || check(TokenType::OR_SYM)) {
@@ -743,23 +936,33 @@ std::unique_ptr<Expr> Parser::unary() {
 }
 std::unique_ptr<Expr> Parser::call() {
     auto expr = primary();
-    while (check(TokenType::LPAREN)) {
-        advance();
-        std::vector<Expr*> args;
-        if (!check(TokenType::RPAREN)) {
-            do {
-                args.push_back(expression().release());
-            } while (match(TokenType::COMMA));
+    while (true) {
+        if (check(TokenType::LPAREN)) {
+            advance();
+            std::vector<Expr*> args;
+            if (!check(TokenType::RPAREN)) {
+                do {
+                    args.push_back(expression().release());
+                } while (match(TokenType::COMMA));
+            }
+            expect(TokenType::RPAREN, "Expected ')' after arguments");
+            expr = std::make_unique<CallExpr>(expr.release(), args);
         }
-        expect(TokenType::RPAREN, "Expected ')' after arguments");
-        expr = std::make_unique<CallExpr>(expr.release(), args);
-    }
-    // indexing
-    while (check(TokenType::LBRACK)) {
-        advance();
-        auto idx = expression();
-        expect(TokenType::RBRACK, "Expected ']'");
-        expr = std::make_unique<IndexExpr>(expr.release(), idx.release());
+        else if (check(TokenType::LBRACK)) {
+            advance();
+            auto idx = expression();
+            expect(TokenType::RBRACK, "Expected ']'");
+            expr = std::make_unique<IndexExpr>(expr.release(), idx.release());
+        }
+        else if (check(TokenType::DOT)) {
+            advance();
+            expect(TokenType::IDENT, "Expected identifier after '.'");
+            auto ident = std::make_unique<LiteralExpr>(Value(previous.lexeme));
+            expr = std::make_unique<IndexExpr>(expr.release(), ident.release());
+        }
+        else {
+            break;
+        }
     }
     return expr;
 }
@@ -776,10 +979,19 @@ std::unique_ptr<Expr> Parser::primary() {
     }
     if (check(TokenType::KEYWORD)) {
         std::string kw = current.lexeme;
-        advance();
-        if (kw == "true") return std::make_unique<LiteralExpr>(Value(true));
-        if (kw == "false") return std::make_unique<LiteralExpr>(Value(false));
-        if (kw == "none") return std::make_unique<LiteralExpr>(Value());
+        if (kw == "true") { advance(); return std::make_unique<LiteralExpr>(Value(true)); }
+        if (kw == "false") { advance(); return std::make_unique<LiteralExpr>(Value(false)); }
+        if (kw == "none") { advance(); return std::make_unique<LiteralExpr>(Value()); }
+        if (kw == "print") {
+            std::string name = kw;
+            advance();
+            if (check(TokenType::EQ)) {
+                advance();
+                auto val = expression();
+                return std::make_unique<AssignExpr>(name, val.release());
+            }
+            return std::make_unique<VarExpr>(name);
+        }
         throw std::runtime_error("Unexpected keyword in expression: " + kw);
     }
     if (check(TokenType::IDENT)) {
@@ -811,12 +1023,27 @@ std::unique_ptr<Expr> Parser::primary() {
         expect(TokenType::RBRACE, "Expected '}'");
         return std::make_unique<TableLiteralExpr>(pairs);
     }
-    throw std::runtime_error("Unexpected token in expression");
+    std::stringstream ss;
+    ss << "Parse error on line " << current.line << ": unexpected token in expression";
+    if (current.type != TokenType::END) {
+        ss << " (found '" << current.lexeme << "')";
+    } else {
+        ss << " (found end of file)";
+    }
+    throw std::runtime_error(ss.str());
 }
 
 std::unique_ptr<Stmt> Parser::statement() {
     if (check(TokenType::KEYWORD)) {
         std::string kw = current.lexeme;
+        if (kw == "print") {
+            // print is a builtin function, treat as expression
+            auto expr = expression();
+            if (match(TokenType::TILDE)) {
+                return std::make_unique<ReturnStmt>(expr.release());
+            }
+            return std::make_unique<ExprStmt>(expr.release());
+        }
         if (kw == "var" || kw == "val") {
             return varDecl(false);
         }
@@ -831,7 +1058,7 @@ std::unique_ptr<Stmt> Parser::statement() {
             }
             throw std::runtime_error("global must be followed by var, val, or func");
         }
-        if (kw == "func") return funcDecl(false);
+        if (kw == "func") { advance(); return funcDecl(false); }
         if (kw == "if") {
             advance();
             return ifStmt();
@@ -860,11 +1087,21 @@ std::unique_ptr<Stmt> Parser::statement() {
         }
         if (kw == "break") {
             advance();
-            throw std::string("break");
+            struct BreakStmt : Stmt {
+                void execute(std::shared_ptr<Environment> /* env */) override {
+                    throw std::string("break");
+                }
+            };
+            return std::make_unique<BreakStmt>();
         }
         if (kw == "continue") {
             advance();
-            throw std::string("continue");
+            struct ContinueStmt : Stmt {
+                void execute(std::shared_ptr<Environment> /* env */) override {
+                    throw std::string("continue");
+                }
+            };
+            return std::make_unique<ContinueStmt>();
         }
         throw std::runtime_error("Unexpected keyword: " + kw);
     }
@@ -900,20 +1137,35 @@ std::unique_ptr<Stmt> Parser::varDecl(bool globalFlag) {
 }
 
 std::unique_ptr<Stmt> Parser::funcDecl(bool globalFlag) {
-    if (current.type != TokenType::IDENT) throw std::runtime_error("Expected function name");
+    if (current.type != TokenType::IDENT) {
+        std::stringstream ss;
+        ss << "Parse error on line " << current.line << ": expected function name";
+        if (current.type != TokenType::END) {
+            ss << " (found '" << current.lexeme << "' instead)";
+        } else {
+            ss << " (found end of file)";
+        }
+        throw std::runtime_error(ss.str());
+    }
     std::string name = current.lexeme;
     advance();
-    if (current.type != TokenType::LPAREN) throw std::runtime_error("Expected '(' after function name");
+    if (current.type != TokenType::LPAREN) {
+        throw std::runtime_error("Parse error on line " + std::to_string(current.line) + ": expected '(' after function name '" + name + "'");
+    }
     advance();
     std::vector<std::string> params;
     if (!check(TokenType::RPAREN)) {
         do {
-            if (current.type != TokenType::IDENT) throw std::runtime_error("Expected parameter name");
+            if (current.type != TokenType::IDENT) {
+                throw std::runtime_error("Parse error on line " + std::to_string(current.line) + ": expected parameter name");
+            }
             params.push_back(current.lexeme);
             advance();
         } while (match(TokenType::COMMA));
     }
-    if (current.type != TokenType::RPAREN) throw std::runtime_error("Expected ')'");
+    if (current.type != TokenType::RPAREN) {
+        throw std::runtime_error("Parse error on line " + std::to_string(current.line) + ": expected ')' after parameters");
+    }
     advance();
     auto bodyBlock = block();
     return std::make_unique<FuncDeclStmt>(name, params, bodyBlock.release(), globalFlag);
@@ -923,15 +1175,30 @@ std::unique_ptr<Stmt> Parser::ifStmt() {
     auto cond = expression();
     auto thenStmt = block();
     std::unique_ptr<Stmt> elseStmt;
-    if (match(TokenType::KEYWORD) && current.lexeme == "elif") {
-        // simple: chain as nested if-else
-        advance();
-        auto elifCond = expression();
-        auto elifThen = block();
-        elseStmt = std::make_unique<IfStmt>(elifCond.release(), elifThen.release(), nullptr);
-    } else if (match(TokenType::KEYWORD) && current.lexeme == "else") {
-        advance();
-        elseStmt = block();
+    if (check(TokenType::KEYWORD)) {
+        if (current.lexeme == "elif") {
+            advance();
+            // Recursively parse elif as nested if-else
+            auto elifCond = expression();
+            auto elifThen = block();
+            std::unique_ptr<Stmt> nestedElse;
+            // Check for more elif/else chains
+            if (check(TokenType::KEYWORD)) {
+                if (current.lexeme == "elif") {
+                    // Recursively handle nested elif
+                    advance();
+                    auto restOfChain = ifStmt();
+                    nestedElse = std::move(restOfChain);
+                } else if (current.lexeme == "else") {
+                    advance();
+                    nestedElse = std::move(block());
+                }
+            }
+            elseStmt = std::make_unique<IfStmt>(elifCond.release(), elifThen.release(), nestedElse.release());
+        } else if (current.lexeme == "else") {
+            advance();
+            elseStmt = std::move(block());
+        }
     }
     return std::make_unique<IfStmt>(cond.release(), thenStmt.release(), elseStmt.release());
 }
@@ -944,41 +1211,57 @@ std::unique_ptr<Stmt> Parser::whileStmt() {
 
 std::unique_ptr<Stmt> Parser::forStmt() {
     // numeric: for i = 0, 10, 2  or for i in range(...)
-    if (match(TokenType::IDENT)) {
-        std::string var = current.lexeme;
+    // or: for k, v in table
+    
+    // First, collect variable names
+    std::vector<std::string> vars;
+    if (check(TokenType::IDENT)) {
+        vars.push_back(current.lexeme);
         advance();
+        while (match(TokenType::COMMA)) {
+            if (current.type != TokenType::IDENT) {
+                throw std::runtime_error("Expected identifier in for loop");
+            }
+            vars.push_back(current.lexeme);
+            advance();
+        }
+    } else {
+        throw std::runtime_error("Expected loop variable in for statement");
+    }
+    
+    // Now check what kind of for loop
+    if (vars.size() == 1) {
         if (match(TokenType::EQ)) {
+            // numeric for: for i = start, end, step
             auto start = expression();
-            expect(TokenType::COMMA, "Expected ',' after start");
+            expect(TokenType::COMMA, "Expected ',' after start value in for loop");
             auto end = expression();
             std::unique_ptr<Expr> step;
-            if (match(TokenType::COMMA)) step = expression();
+            if (match(TokenType::COMMA)) {
+                step = expression();
+            }
             auto body = block();
-            return std::make_unique<ForNumericStmt>(var, start.release(), end.release(), step.release(), body.release());
-        } else if (match(TokenType::KEYWORD) && current.lexeme == "in") {
+            return std::make_unique<ForNumericStmt>(vars[0], start.release(), end.release(), step.release(), body.release());
+        } else if (check(TokenType::KEYWORD) && current.lexeme == "in") {
+            // for i in iterable
             advance();
             auto iterable = expression();
             auto body = block();
-            std::vector<std::string> vars = {var};
             return std::make_unique<ForInStmt>(vars, iterable.release(), body.release());
+        } else {
+            throw std::runtime_error("Expected '=' or 'in' in for loop");
         }
-    } else if (match(TokenType::KEYWORD) && current.lexeme == "in") {
-        // for k, v in entries(t)
-        advance();
-        // parse left side as comma separated identifiers
-        std::vector<std::string> vars;
-        do {
-            if (current.type != TokenType::IDENT) throw std::runtime_error("Expected identifier in for-in");
-            vars.push_back(current.lexeme);
+    } else {
+        // Multi-variable for loop: for k, v in table
+        if (check(TokenType::KEYWORD) && current.lexeme == "in") {
             advance();
-        } while (match(TokenType::COMMA));
-        if (current.type != TokenType::KEYWORD || current.lexeme != "in") throw std::runtime_error("Expected 'in'");
-        advance();
-        auto iterable = expression();
-        auto body = block();
-        return std::make_unique<ForInStmt>(vars, iterable.release(), body.release());
+            auto iterable = expression();
+            auto body = block();
+            return std::make_unique<ForInStmt>(vars, iterable.release(), body.release());
+        } else {
+            throw std::runtime_error("Error: multiple variables in for loop require 'in' keyword");
+        }
     }
-    throw std::runtime_error("Invalid for statement");
 }
 
 std::unique_ptr<Stmt> Parser::returnStmt() {

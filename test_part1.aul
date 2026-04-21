@@ -1,0 +1,14 @@
+// AUL Test Program
+
+// Test 1: Basic variables and arithmetic
+print("=== Test 1: Variables and Arithmetic ===")
+var x = 10
+val y = 20
+print("x = ")
+print(x)
+print("y = ")
+print(y)
+print("x + y = ")
+print(x + y)
+print("x * y = ")
+print(x * y)

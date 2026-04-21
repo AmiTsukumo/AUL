@@ -1,1 +1,51 @@
-print(1)
+// Test various interpreter edge cases
+print("=== AUL Debug Test Suite ===")
+
+// Test 1: String concatenation
+var s1 = "Hello"
+var s2 = "World"
+print("Test 1: String concat: " .. s1 .. " " .. s2)
+
+// Test 2: Numeric for loop scope
+print("\nTest 2: For loop scope")
+for i = 0, 3 {
+    print("  loop i = " .. i.toString())
+}
+
+// Test 3: break / continue
+print("\nTest 3: break and continue")
+var counter = 0
+while counter < 10 {
+    counter = counter + 1
+    if counter == 3 { continue }
+    if counter == 7 { break }
+    print("  counter = " .. counter.toString())
+}
+print("  after loop counter = " .. counter.toString())
+
+// Test 4: bitwise operators
+print("\nTest 4: Bitwise operations")
+print("  5 & 3 = " .. (5 & 3).toString())
+print("  5 | 3 = " .. (5 | 3).toString())
+print("  ~2    = " .. (~2).toString())
+
+// Test 5: comparison operators
+print("\nTest 5: Comparison operators")
+print("  5 <  10 = " .. (5 < 10).toString())
+print("  10 > 5  = " .. (10 > 5).toString())
+print("  5 <= 5  = " .. (5 <= 5).toString())
+print("  7 >= 10 = " .. (7 >= 10).toString())
+
+// Test 6: table indexing
+print("\nTest 6: Table operations")
+var tbl = {
+    a = 42,
+    b = "test",
+    99 = "numeric key"
+}
+print("  tbl.a = " .. tbl.a.toString())
+print("  tbl['b'] = " .. tbl['b'].toString())
+print("  tbl[99] = " .. tbl[99].toString())
+print("  tbl.none = " .. tbl.none.toString())
+
+print("\n=== All tests completed ===")
