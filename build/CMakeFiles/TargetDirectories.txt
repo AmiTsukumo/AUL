@@ -1,0 +1,3 @@
+/workspaces/AUL/build/CMakeFiles/aul.dir
+/workspaces/AUL/build/CMakeFiles/edit_cache.dir
+/workspaces/AUL/build/CMakeFiles/rebuild_cache.dir

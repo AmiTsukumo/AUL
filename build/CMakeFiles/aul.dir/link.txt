@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/aul.dir/main.cpp.o CMakeFiles/aul.dir/Lexer.cpp.o CMakeFiles/aul.dir/Parser.cpp.o CMakeFiles/aul.dir/Value.cpp.o CMakeFiles/aul.dir/Environment.cpp.o CMakeFiles/aul.dir/Interpreter.cpp.o -o aul 

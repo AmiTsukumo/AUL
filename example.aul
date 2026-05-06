@@ -1,0 +1,102 @@
+// AUL Example Program
+// Demonstrates various features
+
+// Test basic operations
+print("=== Testing Unary Operators ===")
+var x = 5
+print("x = " .. x)
+print("-x = " .. (-x))
+print("!true = " .. (!true))
+print("not false = " .. (not false))
+
+// Test bitwise AND/OR
+print("\n=== Testing Bitwise Operations ===")
+var a = 5
+var b = 3
+print("5 & 3 = " .. (a & b))       // Should be 1 (binary: 101 & 011 = 001)
+print("5 || 3 = " .. (a || b))      // Should be 7 (binary: 101 | 011 = 111)
+
+// Test logical operators work correctly
+print("\n=== Testing Logical Operators ===")
+print("true and false = " .. (true and false))
+print("true or false = " .. (true or false))
+
+// Test recursion
+print("\n=== Testing Recursion ===")
+func factorial(n) {
+    if n == 0 {
+        1 ~
+    } elif n == 1 {
+        1 ~
+    } else {
+        n * factorial(n - 1) ~
+    }
+}
+
+for i = 0, 6 {
+    print("factorial(" .. i .. ") = " .. factorial(i))
+}
+
+// Test tables
+print("\n=== Testing Tables ===")
+var t = {10, 20, 30}
+for i = 0, 3 {
+    print("t[" .. i .. "] = " .. t[i])
+}
+
+// Test string concatenation
+print("\n=== Testing String Concatenation ===")
+var greeting = "Hello"
+var name = "World"
+print(greeting .. ", " .. name .. "!")
+
+// Test control flow
+print("\n=== Testing Control Flow ===")
+for i = 0, 5 {
+    if i == 3 {
+        print("Found 3, breaking...")
+        break
+    }
+    if i == 1 {
+        print("Skipping 1...")
+        continue
+    }
+    print("i = " .. i)
+}
+
+print("\n=== Testing Multiple Elif ===")
+var result = "none"
+if false {
+    result = "A"
+} elif false {
+    result = "B"
+} elif true {
+    result = "C"
+} else {
+    result = "D"
+}
+print("elif result: " .. result)
+
+print("\n=== Testing While Loop ===")
+var count = 0
+while count < 3 {
+    print("count = " .. count)
+    count = count + 1
+}
+
+print("\n=== Testing For-In Loop ===")
+var items = {"apple", "banana", "cherry"}
+for item in items {
+    print("item: " .. item)
+}
+
+print("\n=== Type-Strict Equality ===")
+var xv = 1
+var yv = "1"
+if xv == yv {
+    print("FAIL: 1 should not equal '1'")
+} else {
+    print("PASS: 1 != '1' with strict equality")
+}
+
+print("\n✓ All tests completed!")

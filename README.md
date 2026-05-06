@@ -51,7 +51,17 @@ This repository contains the language specification for AUL. For more details, s
 
 ### Building/Running AUL
 
-*(Implementation coming soon)*
+```bash
+mkdir build && cd build
+cmake ..
+make
+./aul example.aul
+```
+
+The interpreter supports:
+- **File mode**: `./aul example.aul` loads and executes an AUL file
+- **Interactive REPL**: Running without arguments starts an interactive session
+- **Built-in functions**: `print`, `range`, `entries`, `len`, `push`
 
 ## Contributing
 
